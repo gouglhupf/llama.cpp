@@ -655,6 +655,10 @@ bool llama_moe_cache::copy(ggml_backend_t backend, const ggml_tensor * src, ggml
     return pimpl->copy(backend, src, dst, graph);
 }
 
+bool llama_moe_cache::is_slot_map(const ggml_tensor * src) const {
+    return pimpl->layer_of.count(src) > 0;
+}
+
 int64_t llama_moe_cache::copy_experts(ggml_backend_t backend, const ggml_tensor * w, ggml_tensor * dst, int64_t e, int64_t last) {
     return pimpl->copy_experts(backend, w, dst, e, last);
 }

@@ -551,11 +551,6 @@ llama_context::llama_context(
 
         if (cparams.moe_cache_size > 0) {
             moe_cache = std::make_unique<llama_moe_cache>(model, backend_ptrs, backend_buft, cparams.moe_cache_size);
-            if (cparams.prefetch_weights) {
-                // the MoE cache relies on the copy callback to upload experts, which the prefetch path bypasses
-                LLAMA_LOG_WARN("%s: weight prefetching is not supported with the MoE cache, disabling prefetch\n", __func__);
-                cparams.prefetch_weights = false;
-            }
         }
 
         sched_reserve();
@@ -717,6 +712,12 @@ void llama_context::sched_new(size_t max_nodes, bool parallel) {
     ggml_backend_sched_set_copy_callback(sched.get(), sched_copy_experts, this);
     ggml_backend_sched_set_realloc_callback(sched.get(), sched_graph_realloc, this);
     ggml_backend_sched_set_prefetch_weights(sched.get(), cparams.prefetch_weights);
+    if (moe_cache) {
+        // the slot maps are handled by the copy callback, exclude them from prefetching and split fusion
+        ggml_backend_sched_set_prefetch_filter(sched.get(), [](const ggml_tensor * tensor, void * user_data) {
+            return !static_cast<llama_moe_cache *>(user_data)->is_slot_map(tensor);
+        }, moe_cache.get());
+    }
 }
 
 void llama_context::sched_reserve() {

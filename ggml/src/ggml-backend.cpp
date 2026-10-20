@@ -977,6 +977,8 @@ struct ggml_backend_sched {
 
     bool op_offload;
     bool prefetch_weights;
+    ggml_backend_sched_prefetch_filter callback_prefetch_filter;
+    void * callback_prefetch_filter_user_data;
 
     // prefetch support: copy backends and events for compute/transfer overlap
     ggml_backend_t       copy_backends[GGML_SCHED_MAX_BACKENDS];
@@ -1516,6 +1518,7 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
                         break;
                     }
                     bool has_weight_offload = false;
+                    bool filter_blocked = false;
                     for (int j = 0; j < GGML_MAX_SRC; j++) {
                         struct ggml_tensor * src = next->src[j];
                         if (src == NULL) {
@@ -1524,10 +1527,18 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
                         if (src->buffer != NULL && src->buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
                             int src_backend_id = tensor_backend_id(src);
                             if (src_backend_id != node_backend_id && !ggml_backend_sched_buffer_supported(sched, src, node_backend_id)) {
-                                has_weight_offload = true;
+                                if (sched->callback_prefetch_filter != NULL && !sched->callback_prefetch_filter(src, sched->callback_prefetch_filter_user_data)) {
+                                    // the copy callback handles this weight, so the node using it must start its own split
+                                    filter_blocked = true;
+                                } else {
+                                    has_weight_offload = true;
+                                }
                                 break;
                             }
                         }
+                    }
+                    if (filter_blocked) {
+                        break;
                     }
                     if (has_weight_offload) {
                         fuse_end = k;
@@ -2008,7 +2019,9 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                             struct ggml_tensor * input = next->inputs[input_id];
                             if (input->buffer != NULL &&
                                 ggml_backend_buffer_get_usage(input->buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS &&
-                                ggml_backend_buffer_is_host(input->buffer)) {
+                                ggml_backend_buffer_is_host(input->buffer) &&
+                                (sched->callback_prefetch_filter == NULL ||
+                                 sched->callback_prefetch_filter(input, sched->callback_prefetch_filter_user_data))) {
                                 struct ggml_tensor * input_cpy = tensor_copy(input, next->backend_id, sched->cur_copy);
                                 ggml_backend_tensor_set_async(copy_backend, input_cpy, input->data, 0, ggml_nbytes(input));
                                 next_weights_prefetched = true;
@@ -2031,7 +2044,10 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         }
         for (int input_id = 0; input_id < split->n_inputs; input_id++) {
             // skip weight inputs that were already prefetched by the previous split
-            if (weights_prefetched && ggml_backend_sched_is_host_weight(split->inputs[input_id])) {
+            if (weights_prefetched &&
+                ggml_backend_sched_is_host_weight(split->inputs[input_id]) &&
+                (sched->callback_prefetch_filter == NULL ||
+                 sched->callback_prefetch_filter(split->inputs[input_id], sched->callback_prefetch_filter_user_data))) {
                 continue;
             }
             if (ggml_backend_sched_is_host_weight(split->inputs[input_id])) {
@@ -2350,6 +2366,12 @@ void ggml_backend_sched_set_prefetch_weights(ggml_backend_sched_t sched, bool en
             }
         }
     }
+}
+
+void ggml_backend_sched_set_prefetch_filter(ggml_backend_sched_t sched, ggml_backend_sched_prefetch_filter filter, void * user_data) {
+    GGML_ASSERT(sched);
+    sched->callback_prefetch_filter = filter;
+    sched->callback_prefetch_filter_user_data = user_data;
 }
 
 int ggml_backend_sched_get_n_splits(ggml_backend_sched_t sched) {

@@ -336,6 +336,11 @@ extern "C" {
     // `graph_size_changed` is true if the graph size changed since the last allocation
     typedef void (*ggml_backend_sched_realloc_callback)(ggml_backend_sched_t sched, struct ggml_cgraph * graph, bool backend_ids_changed, bool graph_size_changed, void * user_data);
 
+    // Callback used with weight prefetching to filter which host weights may be prefetched and their copies skipped
+    // return false for weights whose copies are handled by the copy callback, they will not be prefetched
+    // and the splits will not be fused across the nodes that use them
+    typedef bool (*ggml_backend_sched_prefetch_filter)(const struct ggml_tensor * tensor, void * user_data);
+
     // Initialize a backend scheduler, backends with low index are given priority over backends with high index
     GGML_API ggml_backend_sched_t ggml_backend_sched_new(ggml_backend_t * backends, ggml_backend_buffer_type_t * bufts, int n_backends, size_t graph_size, bool parallel, bool op_offload);
     GGML_API void                 ggml_backend_sched_free(ggml_backend_sched_t sched);
@@ -382,6 +387,9 @@ extern "C" {
 
     // Enable async weight prefetching to overlap CPU->GPU transfers with compute
     GGML_API void                 ggml_backend_sched_set_prefetch_weights(ggml_backend_sched_t sched, bool enabled);
+
+    // Set a filter that decides which host weights may be prefetched (optional)
+    GGML_API void                 ggml_backend_sched_set_prefetch_filter(ggml_backend_sched_t sched, ggml_backend_sched_prefetch_filter filter, void * user_data);
 
     //
     // Meta backend
