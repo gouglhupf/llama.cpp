@@ -1,4 +1,4 @@
-# Personal test image: CUDA 13 + sm_86 (RTX 3090), static build with native CPU tuning.
+# Personal test image: CUDA 13 + sm_86 (RTX 3090), CPU build tuned to the host machine.
 # Intended for testing PR #21067 (prefetch weights) on the build machine itself.
 # GGML_NATIVE=ON assumes the machine running the container is the same as the one
 # building it (AVX2+ tuned for the host CPU, which matters with --cpu-moe).
@@ -30,7 +30,10 @@ RUN cmake -B build \
     -DGGML_BACKEND_DL=OFF \
     -DGGML_CPU_ALL_VARIANTS=OFF \
     -DLLAMA_BUILD_TESTS=OFF \
-    -DCMAKE_CUDA_ARCHITECTURES=${CUDA_DOCKER_ARCH} && \
+    -DCMAKE_CUDA_ARCHITECTURES=${CUDA_DOCKER_ARCH} \
+    -DCMAKE_EXE_LINKER_FLAGS=-Wl,--allow-shlib-undefined \
+    -DCMAKE_INSTALL_RPATH='$ORIGIN' \
+    -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON && \
     cmake --build build --config Release -j$(nproc) --target llama-server llama-bench llama-cli
 
 FROM ${BASE_CUDA_RUN_CONTAINER}
@@ -43,7 +46,9 @@ RUN apt-get update && \
 
 WORKDIR /app
 
-COPY --from=build /app/build/bin/llama-server /app/build/bin/llama-bench /app/build/bin/llama-cli /app/
+# shared libs (libllama, libggml*, libggml-cuda) are built into the same bin dir;
+# $ORIGIN rpath makes the binaries find them next to themselves at runtime
+COPY --from=build /app/build/bin/ /app/
 
 ENV LLAMA_ARG_HOST=0.0.0.0
 ENV LLAMA_ARG_PORT=8080
