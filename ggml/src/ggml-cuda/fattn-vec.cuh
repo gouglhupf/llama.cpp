@@ -54,7 +54,7 @@ static __global__ void flash_attn_ext_vec(
     float2     * GGML_CUDA_RESTRICT dst_meta = dst_meta_ptr;
 
     // Skip unused kernel variants for faster compilation:
-    if (use_logit_softcap && !(D == 128 || D == 256)) {
+    if (use_logit_softcap && !(D == 128 || D == 256 || D == 512)) {
         GGML_UNUSED_VARS(Q, K, V, mask, sinks, KV_max, dst, dst_meta, scale,
             max_bias, m0, m1, n_head_log2, logit_softcap,
             ne00, ne01, ne02, ne03,
@@ -577,6 +577,14 @@ void ggml_cuda_flash_attn_ext_vec_case_impl(ggml_backend_cuda_context & ctx, ggm
         if (dst->src[6]) {
             fattn_kernel = dst->src[5] ? flash_attn_ext_vec<D, cols_per_block, type_K, type_V, use_logit_softcap, true, true> :
                                           flash_attn_ext_vec<D, cols_per_block, type_K, type_V, use_logit_softcap, true, false>;
+        }
+    }
+    // ops with kv_rows can only have quantized/f8 K and V (the dispatch gate); f16/bf16 pairs never need the gather variant:
+    constexpr bool have_gather = type_K != GGML_TYPE_F16 && type_K != GGML_TYPE_BF16 &&
+                                 type_V != GGML_TYPE_F16 && type_V != GGML_TYPE_BF16;
+    if constexpr (have_gather) {
+        if (dst->src[5] != nullptr && !dst->src[6]) {
+            fattn_kernel = flash_attn_ext_vec<D, cols_per_block, type_K, type_V, use_logit_softcap, false, true>;
         }
     }
     const bool need_f16_K = type_K == GGML_TYPE_F16;
